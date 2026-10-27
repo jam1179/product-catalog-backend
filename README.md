@@ -142,6 +142,54 @@ Spring JDBC is deliberate: a handful of tables and important listing queries ben
 
 No Redis, event broker, search cluster, partitioning, distributed transactions, or independently deployed microservices are necessary for this scope.
 
+### Backend architecture sketch
+
+```mermaid
+flowchart TD
+    Client["API clients: Postman or other services"]
+
+    subgraph App["One Spring Boot application"]
+        Security["Spring Security: authentication and authorization"]
+        Controller["Product REST controller: HTTP mapping and validation"]
+        Service["Product service: transactions and business rules"]
+        Repository["Product repository: parameterized SQL via JdbcClient"]
+        Cursor["Cursor codec: sign and validate pagination cursors"]
+        Categories["Category controller: direct read via JdbcClient"]
+        Errors["MVC exception handler: ProblemDetail responses"]
+
+        Security -->|"Product requests"| Controller
+        Controller --> Service
+        Service --> Repository
+        Service --> Cursor
+        Security -->|"Category listing"| Categories
+        Controller -.->|"Validation errors"| Errors
+        Service -.->|"Application errors"| Errors
+        Repository -.->|"Database errors"| Errors
+        Categories -.->|"Database errors"| Errors
+    end
+
+    DB[("PostgreSQL: products and categories")]
+    Client -->|"REST requests"| Security
+    Repository --> DB
+    Categories --> DB
+    Errors -->|"HTTP error responses"| Client
+```
+
+The diagram shows logical calls and error handling, not independently deployed services. Successful responses return through the controller to the client. Category listing intentionally uses a small direct JDBC read. JWT authentication and scope checks protect writes in secured mode; reads are public. The explicit local profile permits all requests. Spring Security handles authentication/authorization failures before MVC, separately from the illustrated MVC exception handler.
+
+### Main request flows
+
+| Operation | Processing | Outcome |
+|---|---|---|
+| **Create product** | Validate write scope and request fields → insert inside a transaction → enforce SKU/category/price constraints | `201 Created`, `Location`, product body and initial ETag; duplicate SKU returns `409` |
+| **Retrieve product** | Find by primary key → map the product to its response DTO | `200 OK` with a version-based ETag, or `404` |
+| **List/filter products** | Validate filters and cursor → execute indexed SQL → fetch `limit + 1` → construct the page and signed next cursor | `200 OK` with items, `hasNext` and `nextCursor` |
+| **Update product** | Validate write scope, request fields and `If-Match` → atomically match ID/version → update fields and increment version → commit | `200 OK` with a new ETag, or `412` if the precondition fails |
+| **Delete product** | Validate write scope and `If-Match` → atomically delete by ID/version → commit | `204 No Content`, or `412` if the precondition fails |
+| **List categories** | Read the small taxonomy directly through JdbcClient | `200 OK` with category IDs and names |
+
+Missing `If-Match` returns `428`; malformed supported-header syntax returns `400`. Scope enforcement applies outside the local profile. Detailed contracts, pagination limitations and concurrency behavior appear in sections 8–12.
+
 ## 6. Why PostgreSQL
 
 A few hundred thousand products is a reasonable starting dataset for a single correctly indexed PostgreSQL primary. Actual capacity depends on request rate, hardware, row width, update contention and latency objectives; no throughput guarantee is implied.
@@ -149,7 +197,10 @@ A few hundred thousand products is a reasonable starting dataset for a single co
 | Option | Assessment |
 |---|---|
 | PostgreSQL | Preferred: transactions, unique/FK/check constraints, range filtering, ordered B-tree access, operational simplicity |
+| MySQL | Also suitable; an existing organizational standard could justify choosing it |
 | MongoDB | Useful for variable documents; structured CRUD and category/price filtering do not require a document database |
+| DynamoDB/Cassandra | Useful for specific distributed access patterns; optional filters and ordered global price queries require more modeling/duplication |
+| Elasticsearch/OpenSearch | Add as a derived search index for relevance, facets and typo tolerance; not needed for the initial authoritative catalog |
 | Redis | Potential hot-detail cache later; avoid unnecessary list-cache invalidation now |
 
 Optional heterogeneous attributes could later live in PostgreSQL JSONB. Do not use unindexed JSON filtering as a replacement for explicit columns for common query predicates.
@@ -159,6 +210,34 @@ Optional heterogeneous attributes could later live in PostgreSQL JSONB. Do not u
 `category`: identity ID and unique name.
 
 `product`: identity ID, unique normalized SKU, name, optional description, category FK, `NUMERIC(12,2)` price, version, creation/update timestamps.
+
+### Database relationship sketch
+
+```mermaid
+erDiagram
+    CATEGORY ||--o{ PRODUCT : contains
+
+    CATEGORY {
+        bigint id PK
+        varchar name UK
+    }
+
+    PRODUCT {
+        bigint id PK
+        varchar sku UK
+        varchar name
+        text description
+        bigint category_id FK
+        numeric price
+        bigint version
+        timestamptz created_at
+        timestamptz updated_at
+    }
+```
+
+Each product references exactly one category. A category can contain zero or more products. `PK` means primary key, `FK` means foreign key and `UK` means unique key. The `version` column supports optimistic concurrency. `price` is stored as `NUMERIC(12,2)`; currency is fixed to EUR by the API contract and is not a separate table column.
+
+### Index-to-query mapping
 
 Java uses `BigDecimal`; never `double` for exact money. Maximum price is 9,999,999,999.99 EUR. The API rejects fractional precision beyond two digits. Product names are trimmed. SKU input uses ASCII letters, digits, dots, underscores and hyphens; the first character must be alphanumeric. SKU storage is uppercase using `Locale.ROOT`, so `phone-001` conflicts with `PHONE-001`.
 
