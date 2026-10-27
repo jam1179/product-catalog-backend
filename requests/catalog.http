@@ -1,0 +1,27 @@
+# VS Code REST Client / JetBrains HTTP Client; local profile only.
+@base = http://localhost:8080/api/v1
+
+GET {{base}}/categories
+
+### Create (use a real category ID)
+POST {{base}}/products
+Content-Type: application/json
+
+{"sku":"PHONE-001","name":"Example Phone","description":"128 GB","categoryId":1,"price":499.99}
+
+### Detail (copy ID and ETag from the create response)
+GET {{base}}/products/1
+
+### Filtered list
+GET {{base}}/products?categoryId=1&minPrice=100&maxPrice=700&limit=20
+
+### Replace mutable fields
+PUT {{base}}/products/1
+Content-Type: application/json
+If-Match: "product-1-v0"
+
+{"sku":"PHONE-001","name":"Example Phone Updated","description":null,"categoryId":1,"price":459.99}
+
+### Delete (use latest ETag)
+DELETE {{base}}/products/1
+If-Match: "product-1-v1"

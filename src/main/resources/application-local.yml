@@ -1,0 +1,4 @@
+# Explicit opt-in only. Do not deploy this profile to shared environments.
+spring:
+  flyway:
+    locations: classpath:db/migration,classpath:db/local

@@ -1,0 +1,43 @@
+spring:
+  application:
+    name: product-catalog
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/catalog}
+    username: ${DB_USERNAME:catalog}
+    password: ${DB_PASSWORD}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:10}
+      minimum-idle: 2
+      connection-timeout: 3000
+      connection-init-sql: "SET statement_timeout = '3s'"
+  jdbc:
+    template:
+      query-timeout: 3s
+  flyway:
+    enabled: true
+  mvc:
+    problemdetails:
+      enabled: true
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: true
+server:
+  port: ${PORT:8080}
+  max-http-request-header-size: 16KB
+  tomcat:
+    connection-timeout: 5s
+catalog:
+  cursor-secret: ${CURSOR_SECRET}
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,db
+      show-details: never
